@@ -1,0 +1,445 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql" url = env("DATABASE_URL") }
+enum RideStatus { REQUESTED MATCHING ASSIGNED ARRIVING IN_PROGRESS COMPLETED CANCELLED }
+enum OfferStatus { PENDING ACCEPTED DECLINED EXPIRED }
+enum VehicleType { BIKE AUTO MINI SEDAN SUV }
+enum StaffRole { ADMIN DISPATCH FLEET_MANAGER }
+model StaffUser { id String @id @default(cuid()) email String @unique passwordHash String role StaffRole fleetId String? createdAt DateTime @default(now()) }
+enum DriverStatus { PENDING APPROVED SUSPENDED }
+enum SupportStatus { OPEN IN_PROGRESS RESOLVED }
+model City { id String @id @default(cuid()) name String @unique state String active Boolean @default(true) drivers Driver[] rides Ride[] vehicles Vehicle[] }
+model Customer { id String @id @default(cuid()) name String phone String @unique rides Ride[] createdAt DateTime @default(now()) }
+model Fleet { id String @id @default(cuid()) name String city String drivers Driver[] vehicles Vehicle[] }
+model Driver { id String @id @default(cuid()) name String phone String @unique status DriverStatus @default(PENDING) online Boolean @default(false) cityId String city City @relation(fields:[cityId],references:[id]) fleetId String? fleet Fleet? @relation(fields:[fleetId],references:[id]) rides Ride[] vehicle Vehicle? }
+model Vehicle { id String @id @default(cuid()) plate String @unique type VehicleType active Boolean @default(true) cityId String city City @relation(fields:[cityId],references:[id]) fleetId String? fleet Fleet? @relation(fields:[fleetId],references:[id]) driverId String? @unique driver Driver? @relation(fields:[driverId],references:[id]) documentExpiry DateTime? rides Ride[] }
+model Ride { id String @id @default(cuid()) reference String @unique customerId String customer Customer @relation(fields:[customerId],references:[id]) driverId String? driver Driver? @relation(fields:[driverId],references:[id]) vehicleId String? vehicle Vehicle? @relation(fields:[vehicleId],references:[id]) cityId String city City @relation(fields:[cityId],references:[id]) pickup String pickupLatitude Float? pickupLongitude Float? dropoffLatitude Float? dropoffLongitude Float? dropoff String type VehicleType status RideStatus @default(REQUESTED) farePaise Int @default(0) poolingRequested Boolean @default(false) poolGroupId String? poolGroup PoolGroup? @relation(fields:[poolGroupId],references:[id]) poolSeats Int @default(1) poolConsentAt DateTime? poolFarePaise Int? poolFareApprovedAt DateTime? poolFareExpiresAt DateTime? scheduledAt DateTime? createdAt DateTime @default(now()) updatedAt DateTime @updatedAt @@index([cityId,status,createdAt]) }
+model SupportTicket { id String @id @default(cuid()) reference String @unique subject String status SupportStatus @default(OPEN) priority String @default("NORMAL") createdAt DateTime @default(now()) }
+model SafetyIncident { id String @id @default(cuid()) reference String @unique summary String severity String status String @default("OPEN") createdAt DateTime @default(now()) }
+model PricingRule { id String @id @default(cuid()) city String vehicleType VehicleType basePaise Int perKmPaise Int perMinPaise Int active Boolean @default(true) @@unique([city,vehicleType]) }
+model Settlement { id String @id @default(cuid()) reference String @unique beneficiary String amountPaise Int status String createdAt DateTime @default(now()) }
+model Shift { id String @id @default(cuid()) driverName String vehiclePlate String startsAt DateTime endsAt DateTime status String }
+model AuditLog { id String @id @default(cuid()) actor String action String resource String createdAt DateTime @default(now()) }
+
+// OTP challenges are hashed, single-use and expire quickly. Delivery provider is deliberately not wired.
+model OtpChallenge { id String @id @default(cuid()) phone String role MobileRole codeHash String expiresAt DateTime consumedAt DateTime? attempts Int @default(0) createdAt DateTime @default(now()) @@index([phone,role,createdAt]) }
+enum MobileRole { CUSTOMER DRIVER }
+
+// Latest driver coordinates; never expose a driver's precise location to unrelated users.
+model DriverLocation { driverId String @id latitude Float longitude Float accuracyMeters Float? updatedAt DateTime @updatedAt }
+
+// Assignment offer has an expiry and an explicit acceptance decision.
+model RideOffer { id String @id @default(cuid()) rideId String @unique driverId String status OfferStatus @default(PENDING) expiresAt DateTime createdAt DateTime @default(now()) respondedAt DateTime? @@index([driverId,status,expiresAt]) }
+// Only a keyed digest is stored. Codes are generated on demand for the customer.
+model PickupChallenge { rideId String @id codeHash String expiresAt DateTime attempts Int @default(0) verifiedAt DateTime? createdAt DateTime @default(now()) }
+
+// Persistent assignment history prevents immediately re-offering a declined/expired ride to the same driver.
+model RideOfferAttempt { id String @id @default(cuid()) rideId String driverId String outcome OfferStatus @default(PENDING) createdAt DateTime @default(now()) @@unique([rideId,driverId]) @@index([rideId,outcome]) }
+
+// Persisted, expiring customer-specific quotes. Fare and coordinates are immutable at booking.
+model FareQuote {
+ id String @id @default(cuid())
+ customerId String
+ cityId String
+ type VehicleType
+ pickupLatitude Float
+ pickupLongitude Float
+ dropoffLatitude Float
+ dropoffLongitude Float
+ distanceKm Float
+ estimatedMinutes Int
+ farePaise Int
+ pricingRuleId String
+ expiresAt DateTime
+ consumedAt DateTime?
+ createdAt DateTime @default(now())
+ @@index([customerId,expiresAt])
+}
+
+// Cash collection is recorded by the assigned driver; no online gateway is connected.
+enum PaymentMethod { CASH UPI ONLINE }
+enum PaymentStatus { PENDING RECORDED REFUND_PENDING REFUNDED }
+model RidePayment {
+ id String @id @default(cuid())
+ rideId String @unique
+ method PaymentMethod
+ status PaymentStatus @default(PENDING)
+ amountPaise Int
+ recordedByDriverId String?
+ collectedAt DateTime?
+ upiReference String? @unique
+ upiInitiatedAt DateTime?
+ providerOrderId String? @unique
+ providerPaymentId String? @unique
+ stripeIntentId String? @unique
+ stripeClientSecretIssuedAt DateTime?
+ refundProviderId String? @unique
+ refundRequestedAt DateTime?
+ refundedAt DateTime?
+ refundReason String?
+ providerCapturedAt DateTime?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@index([status,createdAt])
+}
+
+model PaymentWebhookEvent {
+ id String @id @default(cuid())
+ providerEventId String @unique
+ eventType String
+ providerPaymentId String?
+ receivedAt DateTime @default(now())
+ processed Boolean @default(false)
+ outcome String?
+}
+
+// Parcel service is enabled by default even before a settings row exists.
+model ServiceSetting { key String @id enabled Boolean @default(true) updatedAt DateTime @updatedAt }
+enum ParcelStatus { REQUESTED ACCEPTED PICKED_UP IN_TRANSIT DELIVERED CANCELLED }
+model ParcelDelivery {
+ id String @id @default(cuid()) reference String @unique customerId String cityId String
+ pickup String dropoff String recipientName String recipientPhone String
+ description String weightKg Float status ParcelStatus @default(REQUESTED)
+ driverId String? assignedAt DateTime? pickedUpAt DateTime? deliveredAt DateTime?
+ distanceKm Float? estimatedFarePaise Int?
+ fareQuoteExpiresAt DateTime? fareApprovedAt DateTime?
+ deliveryEvidenceNote String? deliveryEvidenceAt DateTime?
+ proofPhotoSha256 String? proofPhotoMime String? proofPhotoBytes Int? proofPhotoUploadedAt DateTime?
+ parcelPaymentStatus String @default("UNPAID") parcelPaymentMethod String? parcelPaymentRecordedAt DateTime?
+ pickupCodeHash String? deliveryCodeHash String? pickupCodeExpiresAt DateTime? deliveryCodeExpiresAt DateTime? pickupAttempts Int @default(0) deliveryAttempts Int @default(0)
+ createdAt DateTime @default(now()) updatedAt DateTime @updatedAt
+ @@index([cityId,status,createdAt]) @@index([customerId,createdAt])
+}
+
+// Independent parcel payment ledger; never reuse passenger ride payments.
+model ParcelPayment {
+ id String @id @default(cuid())
+ parcelId String @unique
+ provider String
+ status PaymentStatus @default(PENDING)
+ amountPaise Int
+ currency String @default("INR")
+ stripeIntentId String? @unique
+ providerOrderId String? @unique
+ providerPaymentId String? @unique
+ capturedAt DateTime?
+ refundProviderId String? @unique
+ refundRequestedAt DateTime?
+ refundedAt DateTime?
+ refundReason String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@index([status,createdAt])
+}
+
+// Shared group membership is explicit; independent ride payment records remain separate.
+model PoolGroup {
+ id String @id @default(cuid())
+ cityId String
+ vehicleType VehicleType
+ seatCapacity Int
+ status String @default("FORMING")
+ driverId String?
+ vehicleId String?
+ confirmedStopsJson String?
+ roadValidatedAt DateTime?
+ fareOfferedAt DateTime?
+ currentStopIndex Int @default(0)
+ rides Ride[]
+ createdAt DateTime @default(now())
+ @@index([cityId,status])
+}
+
+// Per-passenger pickup secret is stored as a keyed digest, never plaintext.
+model PoolPickupChallenge {
+ id String @id @default(cuid())
+ groupId String
+ rideId String @unique
+ codeDigest String
+ expiresAt DateTime
+ attempts Int @default(0)
+ verifiedAt DateTime?
+ createdAt DateTime @default(now())
+ @@index([groupId])
+}
+
+
+// Phase 52: immutable payment snapshot and one open review request per group.
+model PoolCancellationReview {
+ id String @id @default(cuid())
+ groupId String @unique
+ requestedBy String
+ reason String
+ status String @default("PENDING_REVIEW")
+ paymentSnapshotJson String
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@index([status,createdAt])
+}
+
+// Phase 57: durable, append-only observations. These are NOT refund authorizations.
+model PoolGatewayReconciliation {
+ id String @id @default(cuid())
+ reviewId String
+ groupId String
+ paymentFingerprintJson String
+ checksJson String
+ allVerified Boolean
+ eligibleForManualReview Boolean
+ checkedAt DateTime @default(now())
+ @@index([groupId,checkedAt])
+ @@index([reviewId,checkedAt])
+}
+
+// Phase 58: promotional quotes and gratuity requests are non-collecting until checkout integration.
+model RideCoupon { id String @id @default(cuid()) code String @unique active Boolean @default(true) percentOff Int maxDiscountPaise Int expiresAt DateTime redemptionLimit Int? redeemedCount Int @default(0) createdAt DateTime @default(now()) }
+model RideCouponPreview { id String @id @default(cuid()) rideId String customerId String couponId String basePaise Int discountPaise Int quotedPaise Int expiresAt DateTime createdAt DateTime @default(now()) @@index([rideId,customerId]) }
+model RideTipIntent { id String @id @default(cuid()) rideId String @unique customerId String amountPaise Int status String @default("NOT_CHARGED") createdAt DateTime @default(now()) updatedAt DateTime @updatedAt }
+
+model RideCouponRedemption { id String @id @default(cuid()) rideId String @unique customerId String couponId String previewId String @unique basePaise Int discountPaise Int chargedPaise Int createdAt DateTime @default(now()) @@index([couponId,createdAt]) }
+
+// Phase 62: independent tip payment preparation. Never equate an intent with collected funds.
+model RideTipPayment {
+  id String @id @default(cuid())
+  rideId String @unique
+  tipIntentId String @unique
+  customerId String
+  amountPaise Int
+  currency String @default("INR")
+  status String @default("PREPARED")
+  idempotencyKey String @unique
+  provider String?
+  providerPaymentId String? @unique
+  gatewayClientSecretIssuedAt DateTime?
+  preparedAt DateTime @default(now())
+  verifiedAt DateTime?
+  updatedAt DateTime @updatedAt
+}
+
+// Phase 63: admin payment channel switches; development defaults enabled.
+model PaymentChannelSetting {
+  method String @id
+  enabled Boolean @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+// Encrypted at rest; never return ciphertext or plaintext in admin reads.
+model PaymentProviderCredential {
+  provider String @id
+  encryptedJson String @db.Text
+  updatedAt DateTime @updatedAt
+}
+
+// Phase 72: immutable admin investigation evidence; not a financial ledger transition.
+model TipInvestigation {
+ id String @id @default(cuid())
+ tipPaymentId String
+ actorId String
+ reason String @db.VarChar(500)
+ provider String
+ reference String?
+ result String @db.Text
+ createdAt DateTime @default(now())
+ @@index([tipPaymentId,createdAt])
+}
+
+// Phase 73: proposals are review-only; no gateway reference changes occur.
+model TipRecoveryProposal {
+ id String @id @default(cuid())
+ tipPaymentId String
+ proposedProvider String
+ proposedReference String
+ reason String @db.VarChar(500)
+ proposedBy String
+ status String @default("PENDING_REVIEW")
+ reviewedBy String?
+ reviewReason String? @db.VarChar(500)
+ reviewedAt DateTime?
+ createdAt DateTime @default(now())
+ @@index([tipPaymentId,createdAt])
+ @@index([createdAt,id])
+ @@index([proposedProvider,proposedReference,status])
+}
+
+// Push tokens are owned by an authenticated mobile account, never accepted for arbitrary users.
+model PushDevice {
+ id String @id @default(cuid())
+ token String @unique
+ accountId String
+ role MobileRole
+ platform String
+ enabled Boolean @default(true)
+ updatedAt DateTime @updatedAt
+ createdAt DateTime @default(now())
+ @@index([accountId,role,enabled])
+}
+model PushDelivery {
+ id String @id @default(cuid())
+ eventKey String @unique
+ createdAt DateTime @default(now())
+}
+
+model AdminPushCampaign {
+ category String @default("GENERAL")
+ scheduledAt DateTime?
+ idempotencyKey String? @unique
+ claimedAt DateTime?
+
+ id String @id @default(cuid())
+ actorId String
+ audience String
+ title String
+ body String
+ targetAccountId String?
+ matchedDevices Int
+ successfulDevices Int @default(0)
+ failedDevices Int @default(0)
+ status String @default("STARTED")
+ createdAt DateTime @default(now())
+ completedAt DateTime?
+ @@index([createdAt])
+}
+
+// Durable per-account notification history; a push is only a delivery channel.
+model MobileNotification {
+ id String @id @default(cuid())
+ eventKey String
+ accountId String
+ role MobileRole
+ category String
+ title String
+ body String
+ rideId String?
+ readAt DateTime?
+ createdAt DateTime @default(now())
+ @@unique([eventKey,accountId,role])
+ @@index([accountId,role,createdAt])
+}
+model PushPreference {
+ id String @id @default(cuid())
+ accountId String
+ role MobileRole
+ marketingEnabled Boolean @default(false)
+ updatedAt DateTime @updatedAt
+ @@unique([accountId,role])
+}
+
+// Transactional notification outbox: one record per recipient, persisted before FCM.
+model NotificationOutbox {
+ id String @id @default(cuid())
+ eventKey String
+ accountId String
+ role String
+ category String
+ title String
+ body String
+ rideId String?
+ status String @default("PENDING")
+ attempts Int @default(0)
+ nextAttemptAt DateTime @default(now())
+ claimedAt DateTime?
+ lastError String?
+ providerAcceptedAt DateTime?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@unique([eventKey,accountId,role])
+ @@index([status,nextAttemptAt])
+}
+
+model RideChatMessage {
+ readAt DateTime?
+ id String @id @default(cuid())
+ rideId String
+ senderId String
+ role MobileRole
+ text String @db.VarChar(1000)
+ createdAt DateTime @default(now())
+ @@index([rideId,createdAt])
+ @@index([rideId,senderId,createdAt])
+}
+
+// Provider-provisioned temporary relay; NEVER store a participant's phone here.
+// Only a trusted backend telecom integration may create ACTIVE sessions.
+model MaskedCallSession {
+ id String @id @default(cuid())
+ rideId String
+ providerSessionId String @unique
+ relayNumber String
+ status String @default("ACTIVE")
+ reconciliationAttempts Int @default(0)
+ nextReconcileAt DateTime?
+ lastReconcileAt DateTime?
+ expiresAt DateTime
+ createdAt DateTime @default(now())
+ @@index([rideId,status,expiresAt])
+}
+
+
+// Provider callbacks are recorded without telephone numbers or relay numbers.
+model MaskedCallEvent {
+ id String @id @default(cuid())
+ eventId String @unique
+ providerSessionId String
+ status String
+ occurredAt DateTime
+ receivedAt DateTime @default(now())
+ applied Boolean @default(false)
+ @@index([providerSessionId,receivedAt])
+}
+
+
+model MaskedCallIncident {
+ id String @id @default(cuid())
+ sessionId String @unique
+ status String @default("OPEN")
+ severity String @default("MEDIUM")
+ summary String
+ acknowledgedAt DateTime?
+ resolvedAt DateTime?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@index([status,updatedAt])
+}
+
+// Phase 128: immutable per-ride earning evidence and controlled manual bank settlements.
+// These records do not authorize an actual bank transfer.
+model DriverEarning {
+ id String @id @default(cuid())
+ rideId String @unique
+ driverId String
+ paymentId String @unique
+ grossPaise Int
+ commissionPaise Int
+ netPaise Int
+ currency String @default("INR")
+ status String @default("AVAILABLE")
+ batchId String?
+ createdAt DateTime @default(now())
+ @@index([driverId,status])
+ @@index([batchId])
+}
+model DriverSettlementBatch {
+ id String @id @default(cuid())
+ driverId String
+ amountPaise Int
+ currency String @default("INR")
+ status String @default("DRAFT")
+ createdById String
+ approvedById String?
+ approvedAt DateTime?
+ bankReference String? @unique
+ transferredAt DateTime?
+ reconciledById String?
+ reconciledAt DateTime?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@index([driverId,status])
+}
+model DriverSettlementAudit {
+ id String @id @default(cuid())
+ batchId String
+ actorId String
+ action String
+ evidence String?
+ createdAt DateTime @default(now())
+ @@index([batchId,createdAt])
+}

@@ -1,0 +1,8 @@
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { ServiceUnavailableException } from '@nestjs/common';
+import { Database } from './database';
+export const PROVIDER_FIELDS={STRIPE:['STRIPE_SECRET_KEY','STRIPE_PUBLISHABLE_KEY','STRIPE_WEBHOOK_SECRET'],RAZORPAY:['RAZORPAY_KEY_ID','RAZORPAY_KEY_SECRET','RAZORPAY_WEBHOOK_SECRET']} as const;
+function encryptionKey(){const hex=process.env.PAYMENT_CREDENTIAL_ENCRYPTION_KEY; if(!hex||!/^[0-9a-fA-F]{64}$/.test(hex))throw new ServiceUnavailableException('Configure 32-byte PAYMENT_CREDENTIAL_ENCRYPTION_KEY before saving credentials');return Buffer.from(hex,'hex');}
+export function encryptCredentials(fields:Record<string,string>){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',encryptionKey(),iv),payload=Buffer.concat([cipher.update(JSON.stringify(fields),'utf8'),cipher.final()]);return [iv.toString('hex'),cipher.getAuthTag().toString('hex'),payload.toString('hex')].join(':');}
+export function decryptCredentials(payload:string):Record<string,string>{const [iv,tag,data]=payload.split(':');const decipher=createDecipheriv('aes-256-gcm',encryptionKey(),Buffer.from(iv,'hex'));decipher.setAuthTag(Buffer.from(tag,'hex'));return JSON.parse(Buffer.concat([decipher.update(Buffer.from(data,'hex')),decipher.final()]).toString('utf8'));}
+export async function providerConfig(db:Database,provider:'STRIPE'|'RAZORPAY'){const row=await db.paymentProviderCredential.findUnique({where:{provider}});const saved=row?decryptCredentials(row.encryptedJson):{};return Object.fromEntries(PROVIDER_FIELDS[provider].map(key=>[key,saved[key]||process.env[key]||'']));}

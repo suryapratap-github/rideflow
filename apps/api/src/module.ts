@@ -1,0 +1,26 @@
+import { DriverSettlementController } from './driver-settlements';
+import { jwtSigningSecret } from './runtime-config';
+import { MaskedCallWebhookController, AdminMaskedCallLifecycleController, MaskedCallExpiryWorker, AdminMaskedCallEventsController, AdminMaskedCallIncidentsController } from './masked-call-lifecycle';
+import { RideCommunicationsController, RideCommunicationSummaryController, AdminMaskedCallDiagnosticsController } from './ride-communications';
+import { MobilePushController, AdminPushController, PushService } from './push';
+import { AdminTipInvestigationController } from './tip-investigation';
+import { AdminTipReconciliationController } from './tip-reconciliation';
+import { AdminTipWebhookReviewController, TipPaymentWebhookController } from './tip-webhooks';
+import { MobilePaymentChannelsController, AdminPaymentChannelsController } from './payment-channels';
+import { MobileRideBenefitsController, AdminPoolSettlementController } from './ride-benefits';
+import { AdminPoolingController, MobilePoolingStopsController } from './pooling';
+import { ParcelPaymentController, AdminParcelPaymentController } from './parcel-payments';
+import { MobileParcelController, AdminParcelController, CourierParcelController } from './parcel';
+import { Module } from '@nestjs/common';
+import { Database } from './database';
+import { AppController } from './routes';
+import { MobileAuthController, MobileGuard } from './mobile-auth';
+import { MobileRideController } from './mobile-rides';
+import { AuthController, JwtAuthGuard, RolesGuard } from './security';
+import { JwtModule } from '@nestjs/jwt';
+import { LiveGateway } from './realtime';
+import { DispatchWorker } from './dispatch-worker';
+import { RazorpayController } from './razorpay';
+import { StripeController } from './stripe';
+import { PaymentOperationsController } from './payment-operations';
+@Module({imports:[JwtModule.register({secret:jwtSigningSecret(process.env),signOptions:{expiresIn:'8h'}})],controllers:[DriverSettlementController,AdminMaskedCallIncidentsController,AdminMaskedCallEventsController,MaskedCallWebhookController,AdminMaskedCallLifecycleController,AdminMaskedCallDiagnosticsController,RideCommunicationSummaryController,RideCommunicationsController,AdminPushController,MobilePushController,AdminTipReconciliationController, AdminTipInvestigationController,AdminTipWebhookReviewController,TipPaymentWebhookController,MobilePaymentChannelsController,AdminPaymentChannelsController,MobileRideBenefitsController,AdminPoolSettlementController,AdminPoolingController,MobilePoolingStopsController,ParcelPaymentController,AdminParcelPaymentController,MobileParcelController,AdminParcelController,CourierParcelController,AppController,AuthController,MobileAuthController,MobileRideController,RazorpayController,StripeController,PaymentOperationsController],providers:[MaskedCallExpiryWorker,PushService,Database,JwtAuthGuard,RolesGuard,MobileGuard,LiveGateway,DispatchWorker]}) export class AppModule {}

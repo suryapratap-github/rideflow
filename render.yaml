@@ -1,0 +1,48 @@
+# Render Blueprint. Requires genuine package-lock.json and committed Prisma migrations.
+# Configure secret values in Render environment groups, not in this repository.
+services:
+  - type: web
+    name: rideflow-api
+    runtime: node
+    plan: starter
+    rootDir: apps/api
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: node dist/main.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: STRIPE_CONNECT_PAYOUTS_ENABLED
+        value: "false"
+      - key: STRIPE_CONNECT_PLATFORM_APPROVED
+        value: "false"
+      - key: MASKED_CALL_PROVIDER_ENABLED
+        value: "false"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: SMSMODE_ENABLED
+        value: "false"
+      - key: SMSMODE_API_KEY
+        sync: false
+      - key: OTP_HASH_SECRET
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+  - type: web
+    name: rideflow-dashboard
+    runtime: node
+    plan: starter
+    rootDir: apps/dashboard
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start -- -p $PORT
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
